@@ -222,43 +222,34 @@ static int readConfFile(const char * filename, char * const linebuffer) {
     char* buffer;
 
     buffer = (char*) malloc(MAX_CONFFILE_LINE_LENGTH);
-    if (!buffer) {
-        traceEvent( TRACE_ERROR, "Unable to allocate memory");
-        return -1;
-    }
+    if (!buffer) return -1;
 
     if (access(filename, R_OK)) {
         if (errno == ENOENT)
-            traceEvent(TRACE_ERROR, "parameter file %s not found/unable to access\n", filename);
+            traceEvent(TRACE_ERROR, "parameter file %s not found/unable to access", filename);
         else
-            traceEvent(TRACE_ERROR, "cannot stat file %s, %s\n",filename, strerror(errno));
+            traceEvent(TRACE_ERROR, "cannot stat file %s, %s",filename, strerror(errno));
         free(buffer);
         return -1;
     }
 
 				fd = fopen(filename, "rb");
     if (!fd) {
-        traceEvent(TRACE_ERROR, "Unable to open parameter file '%s': %s\n", filename, strerror(errno));
+        traceEvent(TRACE_ERROR, "Unable to open parameter file '%s': %s", filename, strerror(errno));
         free(buffer);
         return -1;
     }
     while(fgets(buffer, MAX_CONFFILE_LINE_LENGTH,fd)) {
         char* p;
 
-        /* strip out comments */
         p = strchr(buffer, '#');
         if (p) *p ='\0';
 
-        /* remove \n */
         p = strchr(buffer, '\n');
         if (p) *p ='\0';
 
-        /* skip empty lines */
-        if (strlen(buffer) == 0) {
-            continue;
-        }
+        if (strlen(buffer) == 0) continue;
 
-        /* strip out heading spaces */
         p = buffer;
         while (*p == ' ') ++p;
         if (p != buffer) {
@@ -271,31 +262,27 @@ static int readConfFile(const char * filename, char * const linebuffer) {
             }
         }
 
-        /* strip out trailing spaces */
         size_t buf_len = strlen(buffer);
         while(buf_len > 0 && buffer[buf_len-1] == ' ') {
             buffer[buf_len-1] = '\0';
             buf_len--;
         }
 
-        /* check for nested @file option */
         if (strchr(buffer, '@')) {
-            traceEvent(TRACE_ERROR, "@file in file nesting is not supported\n");
+            traceEvent(TRACE_ERROR, "@file in file nesting is not supported");
             free(buffer);
             fclose(fd);
             return -1;
         }
-        /* Calculate the current length and remaining space */
+        
         size_t line_len = strlen(linebuffer);
-
-        /* Check if there is enough space */
         if (line_len + buf_len + 2 <= MAX_CMDLINE_BUFFER_LENGTH) {
             linebuffer[line_len] = ' ';
             memcpy(linebuffer + line_len + 1, buffer, buf_len + 1);
         } else {
             traceEvent(TRACE_ERROR, "too many arguments");
             free(buffer);
-           fclose(fd);
+            fclose(fd);
             return -1;
         }
     }
@@ -357,17 +344,14 @@ static char ** buildargv(int * effectiveargc, char * const linebuffer) {
 
     *effectiveargc = 0;
     buffer = (char *)calloc(1, strlen(linebuffer)+2);
-    if (!buffer) {
-        traceEvent( TRACE_ERROR, "Unable to allocate memory");
-        return NULL;
-    }
+    if (!buffer) return NULL;
 
     memcpy(buffer, linebuffer, strlen(linebuffer) + 1);
 
     maxargc = INITIAL_MAXARGC;
     argv = (char **)malloc(maxargc * sizeof(char*));
-    if (argv == NULL) {
-        traceEvent( TRACE_ERROR, "Unable to allocate memory");
+    if (!argv) {
+        traceEvent(TRACE_ERROR, "Unable to allocate memory");
         free(buffer);
         return NULL;
     }
@@ -379,36 +363,21 @@ static char ** buildargv(int * effectiveargc, char * const linebuffer) {
             argv[argc++] = strdup(buff);
             while(*++p == ' ');
             buff=p;
-            if (argc >= maxargc) {
-                maxargc *= 2;
-                char** new_argv = (char **)realloc(argv, maxargc * sizeof(char*));
-                if (new_argv == NULL) {
-                    traceEvent(TRACE_ERROR, "Unable to re-allocate memory");
-                    for (int i = 0; i < argc; i++) {
-                        free(argv[i]);
-                    }
-                    free(argv);
-                    free(buffer);
-                    return NULL;
-                } else {
-                    argv = new_argv;
-                }
-            }
         } else {
-            if (argc >= maxargc) {
-                maxargc *= 2;
-                char** new_argv = (char **)realloc(argv, maxargc * sizeof(char*));
-                if (new_argv == NULL) {
-                    traceEvent(TRACE_ERROR, "Unable to re-allocate memory");
-                    for (int i = 0; i < argc; i++) free(argv[i]);
-                    free(argv);
-                    free(buffer);
-                    return NULL;
-                }
-                argv = new_argv;
-            }
             argv[argc++] = strdup(buff);
             break;
+        }
+        if (argc >= maxargc) {
+            maxargc *= 2;
+            char** new_argv = (char **)realloc(argv, maxargc * sizeof(char*));
+            if (new_argv == NULL) {
+                traceEvent(TRACE_ERROR, "Unable to re-allocate memory");
+                for (int i = 0; i < argc; i++) free(argv[i]);
+                free(argv);
+                free(buffer);
+                return NULL;
+            }
+            argv = new_argv;
         }
     }
     free(buffer);
@@ -439,10 +408,8 @@ static int edge_init(n2n_edge_t * eee)
 
     eee->tx_transop_idx = N2N_TRANSOP_NULL_IDX; /* No guarantee the others have been setup */
 
-    eee->daemon = 1;    /* By default run in daemon mode. */
+    eee->daemon = 1;
     eee->re_resolve_supernode_ip = 0;
-    /* keyschedule set to NULLs by memset */
-    /* community_name set to NULLs by memset */
     eee->null_transop   = 0;
     eee->udp_sock       = -1;
     eee->udp_sock6      = -1;
@@ -514,6 +481,198 @@ static int edge_init_cc20( n2n_edge_t * eee, uint8_t *encrypt_pwd, uint64_t encr
 }
 #endif
 
+/* ************************************** */
+
+/* Setup encryption based on mode and key */
+static int setup_encryption(n2n_edge_t *eee, int encrypt_mode, const char *encrypt_key) {
+    if (encrypt_mode == 1) {
+        traceEvent(TRACE_NORMAL, "Using no encryption");
+        eee->null_transop = 1;
+        return 0;
+    }
+    
+    if (encrypt_mode == 2) {
+        if (!encrypt_key) {
+            traceEvent(TRACE_WARNING, "No encryption key provided, falling back to no encryption");
+            eee->null_transop = 1;
+            return 0;
+        }
+        traceEvent(TRACE_NORMAL, "Using Twofish encryption");
+        if (edge_init_twofish(eee, (uint8_t*)encrypt_key, strlen(encrypt_key)) < 0) {
+            fprintf(stderr, "Error: twofish setup failed.\n");
+            return -1;
+        }
+        return 0;
+    }
+    
+#ifdef N2N_HAVE_AES
+    if (encrypt_mode == 3) {
+        if (!encrypt_key) {
+            fprintf(stderr, "Error: B3 requires -k <key>\n");
+            exit(1);
+        }
+        traceEvent(TRACE_NORMAL, "Using AES-CBC encryption");
+        if (edge_init_aes(eee, (uint8_t*)encrypt_key, strlen(encrypt_key)) < 0) {
+            fprintf(stderr, "Error: AES setup failed.\n");
+            return -1;
+        }
+        return 0;
+    }
+#endif
+
+#ifdef N2N_HAVE_CC20
+    if (encrypt_mode == 4) {
+        if (!encrypt_key) {
+            fprintf(stderr, "Error: B4 requires -k <key>\n");
+            exit(1);
+        }
+        traceEvent(TRACE_NORMAL, "Using ChaCha20 encryption");
+        if (edge_init_cc20(eee, (uint8_t*)encrypt_key, strlen(encrypt_key)) < 0) {
+            fprintf(stderr, "Error: ChaCha20 setup failed.\n");
+            return -1;
+        }
+        return 0;
+    }
+#endif
+
+    if (encrypt_mode == 5) {
+        if (!encrypt_key) {
+            fprintf(stderr, "Error: B5 requires -k <key>\n");
+            exit(1);
+        }
+        traceEvent(TRACE_NORMAL, "Using Speck encryption");
+        if (edge_init_speck(eee, (uint8_t*)encrypt_key, strlen(encrypt_key)) < 0) {
+            fprintf(stderr, "Error: Speck setup failed.\n");
+            return -1;
+        }
+        return 0;
+    }
+    
+    return 0;
+}
+
+/* ************************************** */
+
+/* Setup UDP sockets for edge */
+static int setup_sockets(n2n_edge_t *eee, int local_port) {
+    eee->udp_sock = open_socket(local_port, 1 /*bind ANY*/);
+    if (eee->udp_sock == -1) {
+        traceEvent(TRACE_ERROR, "Failed to bind main UDP port %u", (signed int)local_port);
+        return -1;
+    }
+
+    eee->udp_sock6 = open_socket6(local_port, 1 /*bind ANY*/);
+    
+    int has_ipv4 = (eee->udp_sock != -1);
+    int has_ipv6 = 0;
+    
+    if (eee->udp_sock6 != -1) {
+        struct ifaddrs *ifap = NULL;
+#ifndef _WIN32
+        if (getifaddrs(&ifap) == 0) {
+            struct ifaddrs *ifa;
+            for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+                if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET6) continue;
+                struct sockaddr_in6 *s6 = (struct sockaddr_in6*)ifa->ifa_addr;
+                if (!IN6_IS_ADDR_LOOPBACK(&s6->sin6_addr) &&
+                    !IN6_IS_ADDR_LINKLOCAL(&s6->sin6_addr)) {
+                    has_ipv6 = 1;
+                    break;
+                }
+            }
+            freeifaddrs(ifap);
+        }
+#else
+        ULONG buflen = 15000;
+        IP_ADAPTER_ADDRESSES *addrs = (IP_ADAPTER_ADDRESSES*)malloc(buflen);
+        if (addrs && GetAdaptersAddresses(AF_INET6, 0, NULL, addrs, &buflen) == NO_ERROR) {
+            IP_ADAPTER_ADDRESSES *a;
+            for (a = addrs; a; a = a->Next) {
+                IP_ADAPTER_UNICAST_ADDRESS *ua;
+                for (ua = a->FirstUnicastAddress; ua; ua = ua->Next) {
+                    struct sockaddr_in6 *s6 = (struct sockaddr_in6*)ua->Address.lpSockaddr;
+                    if (s6->sin6_family == AF_INET6 &&
+                        !IN6_IS_ADDR_LOOPBACK(&s6->sin6_addr) &&
+                        !IN6_IS_ADDR_LINKLOCAL(&s6->sin6_addr)) {
+                        has_ipv6 = 1;
+                        break;
+                    }
+                }
+                if (has_ipv6) break;
+            }
+        }
+        if (addrs) free(addrs);
+#endif
+    }
+
+    if (has_ipv4 && has_ipv6)
+        traceEvent(TRACE_NORMAL, "Edge support: IPv4+IPv6 (dual-stack)");
+    else if (has_ipv6)
+        traceEvent(TRACE_NORMAL, "Edge support: IPv6 only");
+    else
+        traceEvent(TRACE_NORMAL, "Edge support: IPv4 only");
+
+    return 0;
+}
+
+/* ************************************** */
+
+/* Setup management socket */
+static int setup_mgmt_socket(n2n_edge_t *eee, int mgmt_port, const char *mgmt_path) {
+#if !defined(_WIN32)
+    if (mgmt_port == 0) {
+        eee->mgmt_sock = open_socket_unix(mgmt_path, 0660);
+        if (eee->mgmt_sock == -1) {
+            traceEvent(TRACE_ERROR, "Failed to bind management socket %s", mgmt_path);
+            return -1;
+        }
+        return 0;
+    }
+#endif
+    
+    eee->mgmt_sock = open_socket(mgmt_port, 0 /* bind LOOPBACK*/);
+    if (eee->mgmt_sock == -1) {
+        if (mgmt_port == N2N_EDGE_MGMT_PORT) {
+            traceEvent(TRACE_WARNING, "Management socket %u already in use, running without management interface",
+                       (unsigned int)mgmt_port);
+            eee->mgmt_sock = -1;
+        } else {
+            traceEvent(TRACE_ERROR, "Failed to bind management socket %u", (unsigned int)mgmt_port);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* ************************************** */
+
+/* Setup UPnP port mapping */
+static void setup_upnp(n2n_edge_t *eee, int local_port) {
+    uint16_t actual_port = 0;
+    
+    if (local_port > 0) {
+        actual_port = (uint16_t)local_port;
+    } else {
+        struct sockaddr_in bound;
+        socklen_t blen = sizeof(bound);
+        if (getsockname(eee->udp_sock, (struct sockaddr*)&bound, &blen) == 0)
+            actual_port = ntohs(bound.sin_port);
+    }
+
+    if (actual_port > 0) {
+        uint16_t mapped = 0;
+        traceEvent(TRACE_INFO, "Upnp: attempting port mapping for UDP port %u", (unsigned)actual_port);
+        if (upnp_map_port(actual_port, actual_port, &mapped) == UPNP_OK) {
+            traceEvent(TRACE_NORMAL, "Upnp: mapped udp port %u", (unsigned)mapped);
+            eee->upnp_mapped_port = mapped;
+        } else {
+            traceEvent(TRACE_INFO, "Upnp: ... mapping failed");
+        }
+    }
+}
+
+/* ************************************** */
+
 static int transop_enum_to_index( n2n_transform_t id )
 {
     switch (id) {
@@ -541,16 +700,10 @@ static int n2n_tick_transop( n2n_edge_t * eee, time_t now )
 /** Deinitialise the edge and deallocate any owned memory. */
 static void edge_deinit(n2n_edge_t * eee)
 {
-    if ( eee->udp_sock != -1 )
-        closesocket( eee->udp_sock );
+    if (eee->udp_sock != -1) closesocket(eee->udp_sock);
+    if (eee->udp_sock6 != -1) closesocket(eee->udp_sock6);
+    if (eee->mgmt_sock != -1) closesocket(eee->mgmt_sock);
 
-    if ( eee->udp_sock6 != -1 )
-        closesocket( eee->udp_sock6 );
-
-    if ( eee->mgmt_sock != -1 )
-        closesocket(eee->mgmt_sock);
-
-    /* Remove UPnP/NAT-PMP port mapping on exit */
     if (eee->upnp_mapped_port != 0) {
         traceEvent(TRACE_NORMAL, "Removing upnp port mapping for port %u",
                    (unsigned)eee->upnp_mapped_port);
@@ -674,8 +827,7 @@ static ssize_t sendto_sock( SOCKET fd, const void * buf, size_t len, const n2n_s
 /** Select the correct UDP socket based on destination address family */
 static inline SOCKET sock_for_dest( const n2n_edge_t * eee, const n2n_sock_t * dest )
 {
-    if ( dest->family == AF_INET6 && eee->udp_sock6 != -1 )
-        return eee->udp_sock6;
+    if (dest->family == AF_INET6 && eee->udp_sock6 != -1) return eee->udp_sock6;
     return eee->udp_sock;
 }
 
@@ -700,12 +852,10 @@ static void send_register( n2n_edge_t * eee,
     strncpy(reg.version, n2n_sw_version, sizeof(reg.version) - 1);
     strncpy(reg.os_name, n2n_sw_osName, sizeof(reg.os_name) - 1);
 
-    /* Generate a random cookie to match REGISTER with REGISTER_ACK */
     random_bytes(NULL, reg.cookie, N2N_COOKIE_SIZE);
     idx=0;
     encode_mac( reg.srcMac, &idx, eee->device.mac_addr );
 
-    /* Attach our LAN address so the peer can try direct LAN connect */
     if ( eee->local_sock_ena ) {
         reg.sock = eee->local_sock;
         cmn.flags |= N2N_FLAGS_SOCKET;
@@ -749,7 +899,6 @@ static void set_localip( n2n_edge_t * eee )
         sa.sin_family == AF_INET && sa.sin_addr.s_addr != 0)
     {
         uint32_t ip = ntohl(sa.sin_addr.s_addr);
-        /* Only use private IP addresses */
         int is_private = ((ip >> 24) == 10) ||
                          ((ip & 0xFFF00000) == 0xAC100000) ||
                          ((ip >> 16) == (192 << 8 | 168));
@@ -865,7 +1014,6 @@ static void send_register_ack( n2n_edge_t * eee,
     cmn.flags = 0;
     memcpy( cmn.community, eee->community_name, N2N_COMMUNITY_SIZE );
 
-    memset( &ack, 0, sizeof(ack) );
     memcpy( ack.cookie, reg->cookie, N2N_COOKIE_SIZE );
     memcpy( ack.srcMac, eee->device.mac_addr, N2N_MAC_SIZE );
     memcpy( ack.dstMac, reg->srcMac, N2N_MAC_SIZE );
@@ -906,11 +1054,9 @@ static void send_deregister(n2n_edge_t * eee,
 /** Check if two sockets are on the same public IP (same LAN behind same NAT) */
 static int same_public_ip( const n2n_sock_t * a, const n2n_sock_t * b )
 {
-    if ( a->family != b->family ) return 0;
-    if ( a->family == AF_INET )
-        return (memcmp(a->addr.v4, b->addr.v4, IPV4_SIZE) == 0);
-    if ( a->family == AF_INET6 )
-        return (memcmp(a->addr.v6, b->addr.v6, IPV6_SIZE) == 0);
+    if (a->family != b->family) return 0;
+    if (a->family == AF_INET) return (memcmp(a->addr.v4, b->addr.v4, IPV4_SIZE) == 0);
+    if (a->family == AF_INET6) return (memcmp(a->addr.v6, b->addr.v6, IPV6_SIZE) == 0);
     return 0;
 }
 
@@ -979,7 +1125,7 @@ static void start_punch( n2n_edge_t * eee, struct peer_info * peer )
     if ( peer->punch_start_time != 0 ) return;  /* already in progress */
 
     int punched = 0;
-
+    
     /* Try IPv4 punch if available */
     if ( peer->sock.family == AF_INET ) {
         /* Don't punch if same public IP (same LAN) - handled separately */
@@ -993,7 +1139,7 @@ static void start_punch( n2n_edge_t * eee, struct peer_info * peer )
                        macaddr_str(mac_tmp, peer->mac_addr));
         }
     }
-
+    
     /* Try IPv6 punch if available and we have IPv6 socket */
     if ( peer->sock6.family == AF_INET6 && eee->udp_sock6 != -1 ) {
         send_probe(eee, &peer->sock6, peer->mac_addr);
@@ -1001,7 +1147,7 @@ static void start_punch( n2n_edge_t * eee, struct peer_info * peer )
         traceEvent(TRACE_INFO, "IPv6 hole-punch started for %s",
                    macaddr_str(mac_tmp, peer->mac_addr));
     }
-
+    
     if (punched) {
         peer->punch_start_time = n2n_now();
         peer->last_punch_probe = peer->punch_start_time;
@@ -1044,19 +1190,19 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
         {
             /* Retransmit PROBE every 1s for first 5s */
             int sent_probe = 0;
-
+            
             /* Try IPv4 if available */
             if ( scan->sock.family == AF_INET && eee->udp_sock != -1 ) {
                 send_probe(eee, &scan->sock, scan->mac_addr);
                 sent_probe = 1;
             }
-
+            
             /* Try IPv6 if available */
             if ( scan->sock6.family == AF_INET6 && eee->udp_sock6 != -1 ) {
                 send_probe(eee, &scan->sock6, scan->mac_addr);
                 sent_probe = 1;
             }
-
+            
             if (sent_probe) {
                 scan->last_punch_probe = now;
             }
@@ -1122,8 +1268,7 @@ static void check_keepalive( n2n_edge_t * eee, time_t now )
     MACSTR_TMP(mac_tmp);
 
     /* Skip keepalive entirely if there's recent direct P2P communication */
-    if (eee->last_p2p > 0 && (now - eee->last_p2p) < KEEPALIVE_IDLE_SECONDS)
-        return;
+    if (eee->last_p2p > 0 && (now - eee->last_p2p) < KEEPALIVE_IDLE_SECONDS) return;
 
     while ( scan ) {
         struct peer_info *next = scan->next;
@@ -1144,7 +1289,7 @@ static void check_keepalive( n2n_edge_t * eee, time_t now )
         } else if ( scan->sock6.family == AF_INET6 && eee->udp_sock6 != -1 ) {
             keepalive_addr = &scan->sock6;
         }
-
+        
         if ( !keepalive_addr ) {
             /* No valid address for keepalive */
             prev = scan;
@@ -1265,20 +1410,17 @@ void try_send_register( n2n_edge_t * eee,
         n2n_sock_str_t sockbuf;
 
         scan = (struct peer_info*) calloc( 1, sizeof( struct peer_info ) );
-        if (!scan) {
-            traceEvent( TRACE_ERROR, "Unable to allocate memory for peer_info");
-            return;
-        }
+        if (!scan) return;
 
         memcpy(scan->mac_addr, mac, N2N_MAC_SIZE);
-
+        
         /* Store address in correct slot based on family - don't clear the other */
         if (peer->family == AF_INET6) {
             scan->sock6 = *peer;
         } else {
             scan->sock = *peer;
         }
-
+        
         scan->last_seen = n2n_now();
         scan->punch_start_time = 0;
         scan->punch_failed = 0;
@@ -1302,7 +1444,7 @@ void try_send_register( n2n_edge_t * eee,
     } else {
         /* Already pending: update address based on family - preserve other family */
         n2n_sock_t *target_sock = (peer->family == AF_INET6) ? &scan->sock6 : &scan->sock;
-
+        
         if ( sock_equal(target_sock, peer) != 0 ) {
             *target_sock = *peer;
             scan->num_sockets = 1;
@@ -1386,10 +1528,7 @@ void check_peer( n2n_edge_t * eee,
     if ( NULL == scan ) {
         /* Create new peer entry with version/OS info */
         scan = (struct peer_info*) calloc( 1, sizeof( struct peer_info ) );
-        if ( NULL == scan ) {
-            traceEvent( TRACE_ERROR, "check_peer calloc failed" );
-            return;
-        }
+        if (!scan) return;
         memcpy(scan->mac_addr, mac, N2N_MAC_SIZE);
         /* Store address in correct slot based on family */
         if (peer->family == AF_INET6) {
@@ -1461,7 +1600,7 @@ void set_peer_operational( n2n_edge_t * eee,
         scan->last_seen = n2n_now();
         scan->punch_start_time = 0;
         scan->punch_failed = 0;
-
+        
         /* Report P2P connection */
         if ( scan->first_seen != 1 ) {
             char mac_buf[18];
@@ -1512,17 +1651,17 @@ void set_peer_operational( n2n_edge_t * eee,
             /* Peer already operational. Check if we should upgrade to IPv4 (more reliable) */
             int current_is_ipv6 = (scan->sock6.family == AF_INET6 && scan->sock.family == 0);
             int new_is_ipv4 = (peer->family == AF_INET);
-
+            
             if (current_is_ipv6 && new_is_ipv4) {
                 /* Upgrade from IPv6 to IPv4 (better NAT traversal) */
                 scan->sock = *peer;
                 memset(&scan->sock6, 0, sizeof(n2n_sock_t));  /* Clear IPv6 completely */
                 scan->last_seen = n2n_now();
-
+                
                 traceEvent( TRACE_NORMAL, "P2P upgraded to IPv4 for %s at %s (was IPv6)",
                             PEER_ID(mac_buf, scan),
                             sock_to_cstr( sockbuf, peer ) );
-
+                
                 /* Send REGISTER to confirm new address */
                 send_register( eee, peer );
             } else {
@@ -1587,35 +1726,18 @@ static void update_peer_address(n2n_edge_t * eee,
     n2n_sock_str_t sockbuf2; /* don't clobber sockbuf1 if writing two addresses to trace */
     macstr_t mac_buf;
 
-    if ( is_empty_ip_address( peer ) )
-    {
-        /* Not to be registered. */
-        return;
-    }
-
-    if ( 0 == memcmp( mac, broadcast_mac, N2N_MAC_SIZE ) )
-    {
-        /* Not to be registered. */
-        return;
-    }
+    if (is_empty_ip_address(peer)) return;  /* Not to be registered. */
+    if (0 == memcmp(mac, broadcast_mac, N2N_MAC_SIZE)) return;  /* Not to be registered. */
 
 
     while(scan != NULL)
     {
-        if(memcmp(mac, scan->mac_addr, N2N_MAC_SIZE) == 0)
-        {
-            break;
-        }
-
+        if(memcmp(mac, scan->mac_addr, N2N_MAC_SIZE) == 0) break;
         prev = scan;
         scan = scan->next;
     }
 
-    if ( NULL == scan )
-    {
-        /* Not in known_peers. */
-        return;
-    }
+    if (NULL == scan) return;  /* Not in known_peers. */
 
     if (scan->version[0] == '\0') {
         strncpy(scan->version, "unknown", sizeof(scan->version) - 1);
@@ -1627,7 +1749,7 @@ static void update_peer_address(n2n_edge_t * eee,
     /* Determine which address this peer is using (only ONE active) */
     n2n_sock_t *active_sock = NULL;
     int active_is_ipv4 = 0;
-
+    
     if (scan->sock.family == AF_INET) {
         active_sock = &scan->sock;
         active_is_ipv4 = 1;
@@ -1635,17 +1757,17 @@ static void update_peer_address(n2n_edge_t * eee,
         active_sock = &scan->sock6;
         active_is_ipv4 = 0;
     }
-
+    
     if (!active_sock) {
         /* No active address - shouldn't happen for known_peers */
         traceEvent(TRACE_WARNING, "update_peer_address: peer %s has no active address",
                    macaddr_str(mac_buf, mac));
         return;
     }
-
+    
     /* Only update if incoming packet matches the active protocol family */
     int incoming_is_ipv4 = (peer->family == AF_INET);
-
+    
     if (active_is_ipv4 != incoming_is_ipv4) {
         /* Incoming packet uses different protocol than established connection.
          * This can happen if:
@@ -1659,7 +1781,7 @@ static void update_peer_address(n2n_edge_t * eee,
         scan->last_seen = when;  /* Still update last_seen */
         return;
     }
-
+    
     /* Same protocol family: update address if changed */
     if ( 0 != sock_equal( active_sock, peer))
     {
@@ -1713,16 +1835,16 @@ static void update_supernode_reg( n2n_edge_t * eee, time_t nowTime )
     if ( 0 == eee->sup_attempts )
     {
         ++(eee->sn_idx);
-        if (eee->sn_idx >= eee->sn_num) eee->sn_idx=0;
+    if (eee->sn_idx >= eee->sn_num) eee->sn_idx=0;
         traceEvent(TRACE_WARNING, "Supernode not responding - moving to %u of %u",
                    (unsigned int)eee->sn_idx, (unsigned int)eee->sn_num);
         eee->sup_attempts = N2N_EDGE_SUP_ATTEMPTS;
-
+        
         /* Re-resolve supernode address when switching to a different supernode */
         if(eee->re_resolve_supernode_ip)
         {
             supernode2addr(&(eee->supernode), eee->sn_af, eee->sn_ip_array[eee->sn_idx]);
-
+            
             /* Clear alternate address - it will be resolved naturally if domain has both A and AAAA */
             memset(&eee->supernode_alt, 0, sizeof(n2n_sock_t));
         }
@@ -1769,7 +1891,7 @@ static int find_peer_destination(n2n_edge_t * eee,
             if (scan->last_probe_sent > 0 && (now - scan->last_seen) > KEEPALIVE_TOTAL_TIMEOUT) {
                 break; /* retval stays 0, use supernode as fallback */
             }
-
+            
             /* Single-channel routing: prefer IPv4 if available, fallback to IPv6 */
             /* Each peer uses only ONE protocol stack (IPv4 or IPv6) */
             /* IPv4 is more mature and has better NAT traversal reliability */
@@ -1781,7 +1903,7 @@ static int find_peer_destination(n2n_edge_t * eee,
                 /* No valid direct address available */
                 break;
             }
-
+            
             retval=1;
             break;
         }
@@ -1830,10 +1952,8 @@ static int send_PACKET( n2n_edge_t * eee,
 
     PEERS_LOCK(eee);
     dest = find_peer_destination(eee, dstMac, &destination);
-    if ( dest )
-        ++(eee->tx_p2p);
-    else
-        ++(eee->tx_sup);
+    if (dest) ++(eee->tx_p2p);
+    else ++(eee->tx_sup);
     PEERS_UNLOCK(eee);
 
     traceEvent( TRACE_INFO, "send_PACKET to %s", sock_to_cstr( sockbuf, &destination ) );
@@ -1871,9 +1991,7 @@ static int send_PACKET( n2n_edge_t * eee,
  */
 static size_t edge_choose_tx_transop( const n2n_edge_t * eee )
 {
-    if ( eee->null_transop )
-        return N2N_TRANSOP_NULL_IDX;
-
+    if (eee->null_transop) return N2N_TRANSOP_NULL_IDX;
     return eee->tx_transop_idx;
 }
 
@@ -1923,8 +2041,6 @@ static void send_packet2net(n2n_edge_t * eee,
                 traceEvent(TRACE_INFO, "Discarding routed packet [%s]",
                            inet_ntop(AF_INET6, &dst6, ip_buf, sizeof(ip_buf)));
                 return;
-            } else {
-
             }
         }
     }
@@ -2084,13 +2200,10 @@ static int handle_PACKET( n2n_edge_t * eee,
 
     from_supernode= cmn->flags & N2N_FLAGS_FROM_SUPERNODE;
 
-    if ( from_supernode )
-    {
+    if (from_supernode) {
         ++(eee->rx_sup);
         eee->last_sup=now;
-    }
-    else
-    {
+    } else {
         ++(eee->rx_p2p);
         eee->last_p2p=now;
     }
@@ -2112,15 +2225,15 @@ static int handle_PACKET( n2n_edge_t * eee,
                 scan->first_seen = 2;
             }
         }
-
+        
         scan->last_probe_sent = 0;
         scan->keepalive_fails = 0;
-
+        
         /* Check which protocol this peer is using */
         int peer_uses_ipv4 = (scan->sock.family == AF_INET);
         int peer_uses_ipv6 = (scan->sock6.family == AF_INET6);
         int packet_is_ipv4 = (orig_sender->family == AF_INET);
-
+        
         /* Only update if packet matches peer's active protocol */
         if ((peer_uses_ipv4 && packet_is_ipv4) || (peer_uses_ipv6 && !packet_is_ipv4)) {
             n2n_sock_t *expected_sock = peer_uses_ipv4 ? &scan->sock : &scan->sock6;
@@ -2608,7 +2721,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                     int peer_uses_ipv4 = (scan->sock.family == AF_INET);
                     int peer_uses_ipv6 = (scan->sock6.family == AF_INET6);
                     int register_is_ipv4 = (orig_sender->family == AF_INET);
-
+                    
                     /* Only process if REGISTER matches peer's active protocol */
                     if ((peer_uses_ipv4 && register_is_ipv4) || (peer_uses_ipv6 && !register_is_ipv4)) {
                         n2n_sock_t *expected_sock = peer_uses_ipv4 ? &scan->sock : &scan->sock6;
@@ -2776,7 +2889,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
             if (!known) {
                 /* New peer: try both IPv6 and IPv4 if available for maximum connectivity */
                 int tried_ipv6 = 0;
-
+                
                 /* Try IPv6 if peer has IPv6 and we have IPv6 socket */
                 if ((pi.aflags & N2N_AFLAGS_IPV6_SOCKET) &&
                     pi.sock6.family == AF_INET6 &&
@@ -2787,7 +2900,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                     try_send_register(eee, 1, pi.mac, &pi.sock6);
                     tried_ipv6 = 1;
                 }
-
+                
                 /* Also try IPv4 if available (parallel punch for dual-stack) */
                 if (pi.sockets[0].family == AF_INET)
                 {
@@ -2822,7 +2935,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                     /* Fallback: try sockets[0] if we haven't tried IPv6 */
                     try_send_register(eee, 1, pi.mac, &pi.sockets[0]);
                 }
-
+                
                 /* Store sock6 and version/os_name into pending_peer */
                 {
                     struct peer_info *pp = find_peer_by_mac(eee->pending_peers, pi.mac);
@@ -2839,17 +2952,17 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                 /* Known peer: check if address changed (only check active protocol) */
                 int known_uses_ipv4 = (known->sock.family == AF_INET);
                 int known_uses_ipv6 = (known->sock6.family == AF_INET6);
-
+                
                 int addr_changed = 0;
-
+                
                 /* Check if the active protocol's address changed */
                 if (known_uses_ipv4 && pi.sockets[0].family == AF_INET) {
                     addr_changed = (0 != sock_equal(&known->sock, &pi.sockets[0]));
-                } else if (known_uses_ipv6 && (pi.aflags & N2N_AFLAGS_IPV6_SOCKET) &&
+                } else if (known_uses_ipv6 && (pi.aflags & N2N_AFLAGS_IPV6_SOCKET) && 
                            pi.sock6.family == AF_INET6) {
                     addr_changed = (0 != sock_equal(&known->sock6, &pi.sock6));
                 }
-
+                
                 if (addr_changed) {
                     /* Check if known->sock is the LAN address matching pi.sockets[1] */
                     int lan_match = (pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
@@ -2880,7 +2993,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                             try_send_register(eee, 1, pi.mac, &pi.sock6);
                             repunched = 1;
                         }
-
+                        
                         if (pi.sockets[0].family == AF_INET)
                         {
                             if ((pi.aflags & N2N_AFLAGS_LOCAL_SOCKET) &&
@@ -3241,7 +3354,7 @@ static int query_txt_record(const char *domain, char *txt_result, size_t result_
         memset(&dns_addr, 0, sizeof(dns_addr));
         dns_addr.sin_family = AF_INET;
         dns_addr.sin_port = htons(53);
-
+        
 #ifdef _WIN32
         dns_addr.sin_addr.s_addr = inet_addr(dns_servers[i]);
 #else
@@ -3295,14 +3408,14 @@ static int query_txt_record(const char *domain, char *txt_result, size_t result_
 static int query_dns_record(const char *domain, char *ip_result, size_t result_size, int query_ipv6) {
     if (!domain || !ip_result || result_size < (query_ipv6 ? 40 : 16))
         return -1;
-
+    
     const char *dns_servers[] = {"8.8.8.8", "119.29.29.29", "1.1.1.1", "223.5.5.5"};
     uint8_t query_buf[256];
     uint8_t response_buf[1024];
     uint16_t txn_id = (uint16_t)(time(NULL) & 0xFFFF) + query_ipv6;
     uint16_t qtype = query_ipv6 ? 0x1C : 0x01;  /* AAAA=28, A=1 */
     uint16_t expected_rdlen = query_ipv6 ? 16 : 4;
-
+    
     /* Build DNS query */
     query_buf[0] = (txn_id >> 8) & 0xFF;
     query_buf[1] = txn_id & 0xFF;
@@ -3311,7 +3424,7 @@ static int query_dns_record(const char *domain, char *ip_result, size_t result_s
     query_buf[6] = 0x00; query_buf[7] = 0x00;
     query_buf[8] = 0x00; query_buf[9] = 0x00;
     query_buf[10] = 0x00; query_buf[11] = 0x00;
-
+    
     size_t pos = 12;
     const char *p = domain;
     while (*p && pos < sizeof(query_buf) - 20) {
@@ -3328,7 +3441,7 @@ static int query_dns_record(const char *domain, char *ip_result, size_t result_s
     query_buf[pos++] = (qtype >> 8) & 0xFF; query_buf[pos++] = qtype & 0xFF;
     query_buf[pos++] = 0x00; query_buf[pos++] = 0x01;
     int query_len = (int)pos;
-
+    
     /* Try each DNS server */
     for (int i = 0; i < 4; i++) {
         struct sockaddr_in dns_addr;
@@ -3340,10 +3453,10 @@ static int query_dns_record(const char *domain, char *ip_result, size_t result_s
 #else
         inet_pton(AF_INET, dns_servers[i], &dns_addr.sin_addr);
 #endif
-
+        
         SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
         if (sock < 0) continue;
-
+        
 #ifdef _WIN32
         DWORD timeout = 5000;
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
@@ -3351,26 +3464,26 @@ static int query_dns_record(const char *domain, char *ip_result, size_t result_s
         struct timeval tv = {5, 0};
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
-
+        
         if (sendto(sock, (char*)query_buf, query_len, 0,
                    (struct sockaddr*)&dns_addr, sizeof(dns_addr)) < 0) {
             closesocket(sock);
             continue;
         }
-
+        
         socklen_t addr_len = sizeof(dns_addr);
         int resp_len = recvfrom(sock, (char*)response_buf, sizeof(response_buf), 0,
                                  (struct sockaddr*)&dns_addr, &addr_len);
         closesocket(sock);
-
-        if (resp_len > 12 &&
-            response_buf[0] == ((txn_id >> 8) & 0xFF) &&
+        
+        if (resp_len > 12 && 
+            response_buf[0] == ((txn_id >> 8) & 0xFF) && 
             response_buf[1] == (txn_id & 0xFF) &&
             (response_buf[2] & 0x80) && !(response_buf[3] & 0x0F)) {
-
+            
             uint16_t ancount = (response_buf[6] << 8) | response_buf[7];
             if (ancount == 0) continue;
-
+            
             /* Skip question */
             pos = 12;
             while (pos < (size_t)resp_len && response_buf[pos] != 0) {
@@ -3379,7 +3492,7 @@ static int query_dns_record(const char *domain, char *ip_result, size_t result_s
             }
             if (response_buf[pos] == 0) pos++;
             pos += 4;
-
+            
             /* Parse answers */
             for (int j = 0; j < ancount && pos < (size_t)resp_len; j++) {
                 if ((response_buf[pos] & 0xC0) == 0xC0) {
@@ -3389,15 +3502,15 @@ static int query_dns_record(const char *domain, char *ip_result, size_t result_s
                         pos += response_buf[pos] + 1;
                     pos++;
                 }
-
+                
                 if (pos + 10 > (size_t)resp_len) break;
                 uint16_t rtype = (response_buf[pos] << 8) | response_buf[pos+1];
                 uint16_t rdlength = (response_buf[pos+8] << 8) | response_buf[pos+9];
                 pos += 10;
-
+                
                 if (rtype == qtype && rdlength == expected_rdlen && pos + rdlength <= (size_t)resp_len) {
                     if (query_ipv6) {
-                        snprintf(ip_result, result_size,
+                        snprintf(ip_result, result_size, 
                                 "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x",
                                 response_buf[pos], response_buf[pos+1], response_buf[pos+2], response_buf[pos+3],
                                 response_buf[pos+4], response_buf[pos+5], response_buf[pos+6], response_buf[pos+7],
@@ -3484,7 +3597,7 @@ static int supernode2addr(n2n_sock_t * sn, int af, const n2n_sn_name_t addrIn) {
             if( 0 == err ) {
                 if (ainfo) {
                     struct addrinfo *selected = ainfo;
-
+                    
                     /* Prefer user-specified address family, otherwise prefer IPv4 for compatibility */
                     int prefer_af = (af != AF_UNSPEC) ? af : AF_INET;
                     for (struct addrinfo *scan = ainfo; scan; scan = scan->ai_next) {
@@ -3493,7 +3606,7 @@ static int supernode2addr(n2n_sock_t * sn, int af, const n2n_sn_name_t addrIn) {
                             break;
                         }
                     }
-
+                    
                     if (PF_INET == selected->ai_family) {
                         struct sockaddr_in* saddr = (struct sockaddr_in*) selected->ai_addr;
                         memcpy( sn->addr.v4, &(saddr->sin_addr), IPV4_SIZE );
@@ -3513,12 +3626,12 @@ static int supernode2addr(n2n_sock_t * sn, int af, const n2n_sn_name_t addrIn) {
                 /* getaddrinfo failed, try public DNS: IPv4 first, then IPv6 if needed */
                 char ip_str[64];
                 int try_ipv6 = (af != AF_INET);
-
+                
                 if (query_dns_record(addr, ip_str, sizeof(ip_str), 0) == 0 &&
                     inet_pton(AF_INET, ip_str, &sn->addr.v4) == 1) {
                     sn->family = AF_INET;
                     err = 0;
-                } else if (try_ipv6 &&
+                } else if (try_ipv6 && 
                            query_dns_record(addr, ip_str, sizeof(ip_str), 1) == 0 &&
                            inet_pton(AF_INET6, ip_str, &sn->addr.v6) == 1) {
                     sn->family = AF_INET6;
@@ -3548,42 +3661,42 @@ static int supernode2addr(n2n_sock_t * sn, int af, const n2n_sn_name_t addrIn) {
 /* ***************************************************** */
 
 /** Check if supernode domain resolved to a new address and re-register if changed.
- *
+ *  
  *  Main-thread implementation: periodically re-resolves supernode domain when idle.
  *  Checks every 300 seconds (5 minutes) and only when no communication in last 30 seconds.
  *  If supernode domain resolves to a different address, update and re-register.
- *
+ *  
  *  @return 1 if address changed and re-registered, 0 otherwise
  */
 static int check_supernode_domain_and_update(n2n_edge_t * eee, time_t now)
 {
     n2n_sock_t new_addr;
-
+    
     /* Skip if supernode is not a domain name (re_resolve_supernode_ip == 0) */
     if (!eee->re_resolve_supernode_ip) {
         return 0;
     }
-
+    
     /* Check every 300 seconds (5 minutes) */
     if (eee->last_resolve_check != 0 && (now - eee->last_resolve_check) < 300) {
         return 0;
     }
-
+    
     /* Only resolve if edge is idle (no P2P communication in last 30 seconds) */
     /* Note: We don't check last_sup because regular keepalive would prevent updates */
     if ((now - eee->last_p2p <= 30)) {
         return 0;
     }
-
+    
     eee->last_resolve_check = now;
-
+    
     /* Resolve supernode domain in main thread (may block briefly) */
     memset(&new_addr, 0, sizeof(n2n_sock_t));
     if (supernode2addr(&new_addr, eee->sn_af, eee->sn_ip_array[eee->sn_idx]) != 0) {
         traceEvent(TRACE_WARNING, "Failed to resolve supernode domain");
         return 0;
     }
-
+    
     /* Check if address changed */
     if (eee->last_resolved_supernode.family != 0 &&
         sock_equal(&eee->last_resolved_supernode, &new_addr) != 0)
@@ -3591,20 +3704,20 @@ static int check_supernode_domain_and_update(n2n_edge_t * eee, time_t now)
         n2n_sock_str_t new_str;
         sock_to_cstr(new_str, &new_addr);
         traceEvent(TRACE_NORMAL, "Supernode address updated to %s", new_str);
-
+        
         /* Update supernode address and re-register */
         eee->supernode = new_addr;
         eee->last_resolved_supernode = new_addr;
-
+        
         /* Clear alternate address - domain resolution already picked the best address */
         memset(&eee->supernode_alt, 0, sizeof(n2n_sock_t));
-
+        
         traceEvent(TRACE_NORMAL, "Re-registering with supernode at new address");
-
+        
         /* Reset supernode connection state */
         eee->sup_attempts = N2N_EDGE_SUP_ATTEMPTS;
         eee->sn_wait = 0;
-
+        
         send_register_super(eee, &(eee->supernode));
         eee->last_register_req = now;
         return 1;
@@ -3614,7 +3727,7 @@ static int check_supernode_domain_and_update(n2n_edge_t * eee, time_t now)
         /* First resolution - just store it */
         eee->last_resolved_supernode = new_addr;
     }
-
+    
     return 0;
 }
 
@@ -3786,12 +3899,7 @@ static int scan_route(char* optarg, struct tuntap_config* tuntap_config) {
             goto fail;
         }
         r->prefixlen = (uint8_t) strtol(prefix, &p, 10);
-        if (p == NULL || p == prefix)
-        {
-            traceEvent(TRACE_ERROR, "%s is not a valid prefix length for an IPv4 network", prefix);
-            goto fail;
-        }
-        else if (r->prefixlen < 0 || r->prefixlen > 32)
+        if (p == NULL || p == prefix || r->prefixlen > 32)
         {
             traceEvent(TRACE_ERROR, "%s is not a valid prefix length for an IPv4 network", prefix);
             goto fail;
@@ -3809,12 +3917,7 @@ static int scan_route(char* optarg, struct tuntap_config* tuntap_config) {
             goto fail;
         }
         r->prefixlen = (uint8_t) strtol(prefix, &p, 10);
-        if (p == NULL || p == prefix)
-        {
-            traceEvent(TRACE_ERROR, "%s is not a valid prefix length for an IPv6 network", prefix);
-            goto fail;
-        }
-        else if (r->prefixlen < 0 || r->prefixlen > 128)
+        if (p == NULL || p == prefix || r->prefixlen > 128)
         {
             traceEvent(TRACE_ERROR, "%s is not a valid prefix length for an IPv6 network", prefix);
             goto fail;
@@ -3972,34 +4075,26 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
             eee.sn_af = AF_INET6;
         break;
         case 'B':
-        {
             if (!optarg || strlen(optarg) == 0) {
-                    fprintf(stderr, "Error: Invalid -B option format. Use -B3 or -B 3\n");
-                    exit(1);
+                fprintf(stderr, "Error: Invalid -B option format. Use -B3 or -B 3\n");
+                exit(1);
             }
-
             for (int i = 0; optarg[i]; i++) {
                 if (!isdigit(optarg[i])) {
                     fprintf(stderr, "Error: Invalid -B option format. Use -B3 or -B 3\n");
                     exit(1);
                 }
             }
-
             encrypt_mode = atoi(optarg);
-            if (encrypt_mode < 1 || encrypt_mode > 5 || encrypt_mode == 0) {
+            if (encrypt_mode < 1 || encrypt_mode > 5) {
                 fprintf(stderr, "Error: Invalid encryption mode. Use B1-B5\n");
                 exit(1);
             }
             break;
-        }
         case'K':
-        {
             fprintf(stderr, "Error: -K (keyfile) is no longer supported. Use -k with -B3/-B4/-B5.\n");
             exit(1);
-            break;
-        }
         case 'a': /* IP address and mode of TUNTAP interface */
-        {
             if (optarg && strlen(optarg) > 0) {
                 scan_address(ip_addr, N2N_NETMASK_STR_SIZE,
                              ip_mode, N2N_IF_MODE_SIZE,
@@ -4010,81 +4105,56 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
                 ip_prefixlen = 24;
             }
             break;
-        }
         case 'A': /* IP address and mode of TUNTAP interface */
-        {
-            scan_address6(ip6_addr, INET6_ADDRSTRLEN,
-                          &ip6_prefixlen, optarg );
+            scan_address6(ip6_addr, INET6_ADDRSTRLEN, &ip6_prefixlen, optarg );
             break;
-        }
         case 'c': /* community as a string */
-        {
             memset( eee.community_name, 0, N2N_COMMUNITY_SIZE );
             strncpy( (char *)eee.community_name, optarg, N2N_COMMUNITY_SIZE);
             break;
-        }
         case 'E': /* multicast ethernet addresses accepted. */
-        {
             eee.drop_multicast=0;
-            traceEvent(TRACE_DEBUG, "Enabling ethernet multicast traffic\n");
+            traceEvent(TRACE_DEBUG, "Enabling ethernet multicast traffic");
             break;
-        }
 
 #ifndef _WIN32
         case 'u': /* unprivileged uid */
-        {
             userid = atoi(optarg);
             break;
-        }
-        case 'g': /* unprivileged uid */
-        {
+        case 'g': /* unprivileged gid */
             groupid = atoi(optarg);
             break;
-        }
 #endif
 #ifdef N2N_HAVE_DAEMON
         case 'f' : /* do not fork as daemon */
-        {
             eee.daemon=0;
             break;
-        }
-#endif /* #ifdef N2N_HAVE_DAEMON */
+#endif
 
         case 'm' : /* TUNTAP MAC address */
-        {
             strncpy(device_mac,optarg,N2N_MACNAMSIZ);
             break;
-        }
-
         case 'M' : /* TUNTAP MTU */
-        {
             mtu = atoi(optarg);
             break;
-        }
 
         case 'k': /* encrypt key */
-        {
-            traceEvent(TRACE_DEBUG, "encrypt_key = '%s'\n", encrypt_key);
+            traceEvent(TRACE_DEBUG, "encrypt_key = '%s'", encrypt_key);
             encrypt_key = strdup(optarg);
             break;
-        }
         case 'r': /* enable packet routing across n2n endpoints */
-        {
             eee.allow_routing = 1;
             break;
-        }
         case 'R': /* add a route */
-        {
             scan_route(optarg, &tuntap_config);
             eee.allow_routing = 1;
             break;
-        }
 
         case 'l': /* supernode-list */
         {
             if ( eee.sn_num < N2N_EDGE_NUM_SUPERNODES ) {
                 strncpy( (eee.sn_ip_array[eee.sn_num]), optarg, N2N_EDGE_SN_HOST_SIZE);
-                traceEvent(TRACE_DEBUG, "Adding supernode[%u] = %s\n", (unsigned int)eee.sn_num, (eee.sn_ip_array[eee.sn_num]) );
+                traceEvent(TRACE_DEBUG, "Adding supernode[%u] = %s", (unsigned int)eee.sn_num, (eee.sn_ip_array[eee.sn_num]) );
                 ++eee.sn_num;
             } else {
                 fprintf(stderr, "Too many supernodes!\n" );
@@ -4095,43 +4165,32 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
 
 #if defined(N2N_CAN_NAME_IFACE)
         case 'd': /* TUNTAP name */
-        {
             strncpy(tuntap_dev_name, optarg, N2N_IFNAMSIZ);
             break;
-        }
 #endif
         case 'p':
-        {
             local_port = atoi(optarg);
             break;
-        }
 
         case 't':
-        {
             if (optarg[0] == '/') {
                 mgmt_port = 0;
                 strncpy(mgmt_path, optarg, sizeof(mgmt_path));
             } else
                 mgmt_port = atoi(optarg);
             break;
-        }
 
         case 'h': /* help */
-        {
             help();
             exit(0);
-        }
 
         case 'v': /* verbose */
-        {
-            ++traceLevel; /* do 2 -v flags to increase verbosity to DEBUG level*/
+            ++traceLevel;
             break;
-        }
 
         } /* end switch */
     }
 
-    // Only add default if no user supernodes specified
     if (eee.sn_num == 0) {
         strcpy(eee.sn_ip_array[0], "ouno.eu.org:10084");
         eee.sn_num = 1;
@@ -4151,9 +4210,9 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
     cap_set_proc(caps);
     cap_free(caps);
     prctl(PR_SET_KEEPCAPS, 1L);
-    if ( (userid != 0) || (groupid != 0 ) ) {
-        setregid( groupid, groupid );
-        setreuid( userid, userid );
+    if ((userid != 0) || (groupid != 0)) {
+        setregid(groupid, groupid);
+        setreuid(userid, userid);
     }
     prctl(PR_SET_KEEPCAPS, 0L);
     caps = cap_init();
@@ -4164,32 +4223,23 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
 
     srand((unsigned int) time(NULL));
 
-    if (strlen(ip_addr) > 0 && inet_pton(AF_INET, ip_addr, &tuntap_config.ip_addr) != 1) {
-        traceEvent(TRACE_ERROR, "invalid ipv4 address: %s", ip_addr);
-    }
-
     if(!(
 #if N2N_CAN_NAME_IFACE && !defined(_WIN32)
         (tuntap_dev_name[0] != 0) &&
 #endif
-        (eee.community_name[0] != 0)
-    ) ) {
+        (eee.community_name[0] != 0))) {
         help();
         exit(1);
     }
 
-    traceEvent( TRACE_NORMAL, "Starting edge %s", n2n_sw_version );
+    traceEvent(TRACE_NORMAL, "Starting edge %s", n2n_sw_version);
 
-    for (int i = 0; i< eee.sn_num; ++i) {
-        /* Skip the default supernode (last one if it matches default) */
-        if (strcmp(eee.sn_ip_array[i], "ouno.eu.org:10084") == 0) {
-            continue; // Skip displaying default
-        }
-        traceEvent( TRACE_NORMAL, "Supernode %u => %s\n", i, (eee.sn_ip_array[i]) );
+    for (int i = 0; i < eee.sn_num; ++i) {
+        if (strcmp(eee.sn_ip_array[i], "ouno.eu.org:10084") == 0) continue;
+        traceEvent(TRACE_NORMAL, "Supernode %u => %s", i, (eee.sn_ip_array[i]));
     }
 
-    while (supernode2addr( &(eee.supernode), eee.sn_af, eee.sn_ip_array[eee.sn_idx] ) != 0) {
-        // could not resolve IP, sleep and try again
+    while (supernode2addr(&(eee.supernode), eee.sn_af, eee.sn_ip_array[eee.sn_idx]) != 0) {
         if (!g_edge_running) break;
         traceEvent(TRACE_WARNING, "Failed to resolve supernode, retrying in 5 seconds...");
 #ifdef _WIN32
@@ -4199,25 +4249,17 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
 #endif
     }
 
-    /* Resolve alternate address family for dual-stack registration */
-    /* Note: Alternate address will be resolved after socket creation when we know
-     * which address families are actually supported by the local system. */
     memset(&eee.supernode_alt, 0, sizeof(n2n_sock_t));
 
-    /* Check if supernode address is a domain name, enable periodic re-resolution */
-    /* Check if supernode address is a domain name (or TXT domain), enable periodic re-resolution */
+    /* Check if supernode is domain name, enable periodic re-resolution */
     {
-        char *supernode_host = eee.sn_ip_array[eee.sn_idx];
+        char *sn_host = eee.sn_ip_array[eee.sn_idx];
         struct in_addr ipv4_addr;
         struct in6_addr ipv6_addr;
-        /* Check if it's not a raw IP address */
-        if (inet_pton(AF_INET, supernode_host, &ipv4_addr) != 1 &&
-            inet_pton(AF_INET6, supernode_host, &ipv6_addr) != 1)
-        {
-            /* It's a domain name - could be regular domain or TXT domain */
-            /* TXT domain has no port, regular domain has port */
+        if (inet_pton(AF_INET, sn_host, &ipv4_addr) != 1 &&
+            inet_pton(AF_INET6, sn_host, &ipv6_addr) != 1) {
             eee.re_resolve_supernode_ip = 1;
-            traceEvent(TRACE_INFO, "Supernode '%s' is a domain name, enabling periodic resolution", supernode_host);
+            traceEvent(TRACE_INFO, "Supernode '%s' is a domain name, enabling periodic resolution", sn_host);
         }
     }
 
@@ -4228,7 +4270,6 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
 
     if ( 0 == strcmp( "dhcp", ip_mode ) ) {
         traceEvent(TRACE_NORMAL, "Dynamic IP address assignment enabled.");
-
         eee.dyn_ip_mode = 1;
     }
 
@@ -4236,35 +4277,25 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
     tuntap_config.community_name = (const char*)eee.community_name;
     if (device_mac[0] != '\0') {
         if (6 != sscanf(device_mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-            &tuntap_config.device_mac[0],
-            &tuntap_config.device_mac[1],
-            &tuntap_config.device_mac[2],
-            &tuntap_config.device_mac[3],
-            &tuntap_config.device_mac[4],
-            &tuntap_config.device_mac[5]
-        )) {
+            &tuntap_config.device_mac[0], &tuntap_config.device_mac[1],
+            &tuntap_config.device_mac[2], &tuntap_config.device_mac[3],
+            &tuntap_config.device_mac[4], &tuntap_config.device_mac[5])) {
             traceEvent(TRACE_ERROR, "not valid mac address: %s", device_mac);
         }
-        if ( 1 == (tuntap_config.device_mac[0] % 2) ) {
-            traceEvent(TRACE_ERROR, "not a valid singlecast mac address: %s (first octet is uneven)", device_mac);
+        if (1 == (tuntap_config.device_mac[0] % 2)) {
+            traceEvent(TRACE_ERROR, "not a valid singlecast mac address: %s", device_mac);
         }
     }
     tuntap_config.mtu = mtu;
     tuntap_config.dyn_ip4 = eee.dyn_ip_mode;
-    if (strlen(ip_addr) > 0) {
-        if (inet_pton(AF_INET, ip_addr, &tuntap_config.ip_addr) != 1) {
-             traceEvent(TRACE_ERROR, "invalid ipv4 address: %s", ip_addr);
-        }
-    }
+    if (strlen(ip_addr) > 0) inet_pton(AF_INET, ip_addr, &tuntap_config.ip_addr);
     tuntap_config.ip_prefixlen = ip_prefixlen;
-
-    if (ip6_addr[0] == '\0')
-        tuntap_config.ip6_prefixlen = 0;
-    else {
-        if (inet_pton(AF_INET6, ip6_addr, &tuntap_config.ip6_addr) != 1) {
+    if (ip6_addr[0] != '\0') {
+        if (inet_pton(AF_INET6, ip6_addr, &tuntap_config.ip6_addr) != 1)
             traceEvent(TRACE_ERROR, "invalid ipv6 address: %s", ip6_addr);
-        }
         tuntap_config.ip6_prefixlen = ip6_prefixlen;
+    } else {
+        tuntap_config.ip6_prefixlen = 0;
     }
 
 #if defined(HAVE_LIBCAP)
@@ -4286,224 +4317,56 @@ if (argc > 1 && argv[1][0] != '-' && access(argv[1], R_OK) == 0) {
         return(-1);
 
 #if defined(HAVE_LIBCAP)
-    /* drop capabilities */
     caps = cap_init();
     cap_set_proc(caps);
     cap_free(caps);
 #elif !defined(_WIN32)
-    if ( (userid != 0) || (groupid != 0 ) ) {
+    if ((userid != 0) || (groupid != 0)) {
         traceEvent(TRACE_NORMAL, "Interface up. Dropping privileges to uid=%d, gid=%d",
                    (signed int)userid, (signed int)groupid);
-
-        /* Finished with the need for root privileges. Drop to unprivileged user. */
-        if (setregid(groupid, groupid) != 0) {
-            traceEvent(TRACE_WARNING, "setregid failed");
-        }
-        if (setreuid(userid, userid) != 0) {
-            traceEvent(TRACE_WARNING, "setreuid failed");
-        }
+        if (setregid(groupid, groupid) != 0) traceEvent(TRACE_WARNING, "setregid failed");
+        if (setreuid(userid, userid) != 0) traceEvent(TRACE_WARNING, "setreuid failed");
     }
 #endif
 
-  if(local_port > 0)
-      traceEvent(TRACE_NORMAL, "Binding to local port %d", (signed int)local_port);
+    if(local_port > 0)
+        traceEvent(TRACE_NORMAL, "Binding to local port %d", (signed int)local_port);
 
-  if (encrypt_mode == 1) {
-      traceEvent(TRACE_NORMAL, "Using no encryption");
-      eee.null_transop = 1;
-  } else if (encrypt_mode == 2) {
-      if (!encrypt_key) {
-          traceEvent(TRACE_WARNING, "No encryption key provided, falling back to no encryption");
-          encrypt_mode = 1;
-          eee.null_transop = 1;
-      } else {
-          traceEvent(TRACE_NORMAL, "Using Twofish encryption");
-          if (edge_init_twofish(&eee, (uint8_t*)(encrypt_key), strlen(encrypt_key)) < 0) {
-              fprintf(stderr, "Error: twofish setup failed.\n");
-              return(-1);
-          }
-      }
-#ifdef N2N_HAVE_AES
-  } else if (encrypt_mode == 3) {
-      traceEvent(TRACE_NORMAL, "Using AES-CBC encryption");
-      if (!encrypt_key) { fprintf(stderr, "Error: B3 requires -k <key>\n"); exit(1); }
-      if (edge_init_aes(&eee, (uint8_t*)(encrypt_key), strlen(encrypt_key)) < 0) {
-          fprintf(stderr, "Error: AES setup failed.\n");
-          return(-1);
-      }
-#endif
-#ifdef N2N_HAVE_CC20
-  } else if (encrypt_mode == 4) {
-      traceEvent(TRACE_NORMAL, "Using ChaCha20 encryption");
-      if (!encrypt_key) { fprintf(stderr, "Error: B4 requires -k <key>\n"); exit(1); }
-      if (edge_init_cc20(&eee, (uint8_t*)(encrypt_key), strlen(encrypt_key)) < 0) {
-          fprintf(stderr, "Error: ChaCha20 setup failed.\n");
-          return(-1);
-      }
-#endif
-  } else if (encrypt_mode == 5) {
-      traceEvent(TRACE_NORMAL, "Using Speck encryption");
-      if (!encrypt_key) { fprintf(stderr, "Error: B5 requires -k <key>\n"); exit(1); }
-      if (edge_init_speck(&eee, (uint8_t*)(encrypt_key), strlen(encrypt_key)) < 0) {
-          fprintf(stderr, "Error: Speck setup failed.\n");
-          return(-1);
-      }
-  }
+    if (setup_encryption(&eee, encrypt_mode, encrypt_key) < 0)
+        return -1;
 
-    eee.udp_sock = open_socket(local_port, 1 /*bind ANY*/ );
-    if(eee.udp_sock == -1)
-    {
-        traceEvent( TRACE_ERROR, "Failed to bind main UDP port %u", (signed int)local_port );
-        return(-1);
-    }
+    if (setup_sockets(&eee, local_port) < 0)
+        return -1;
 
-    /* Try to open IPv6 socket on same port for dual-stack support */
-    eee.udp_sock6 = open_socket6(local_port, 1 /*bind ANY*/);
-
-    /* Detect actual system connectivity by checking available address families */
-    int has_ipv4 = (eee.udp_sock != -1);
-    int has_ipv6 = 0;
-    {
-        if (eee.udp_sock6 != -1) {
-            /* Check if system has any real IPv6 address (not just loopback) */
-            struct ifaddrs *ifap = NULL;
-#ifndef _WIN32
-            if (getifaddrs(&ifap) == 0) {
-                struct ifaddrs *ifa;
-                for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
-                    if (!ifa->ifa_addr) continue;
-                    if (ifa->ifa_addr->sa_family == AF_INET6) {
-                        struct sockaddr_in6 *s6 = (struct sockaddr_in6*)ifa->ifa_addr;
-                        /* skip loopback ::1 and link-local fe80:: */
-                        if (!IN6_IS_ADDR_LOOPBACK(&s6->sin6_addr) &&
-                            !IN6_IS_ADDR_LINKLOCAL(&s6->sin6_addr)) {
-                            has_ipv6 = 1;
-                            break;
-                        }
-                    }
-                }
-                freeifaddrs(ifap);
-            }
-#else
-            /* Windows: check via GetAdaptersAddresses */
-            ULONG buflen = 15000;
-            IP_ADAPTER_ADDRESSES *addrs = (IP_ADAPTER_ADDRESSES*)malloc(buflen);
-            if (addrs && GetAdaptersAddresses(AF_INET6, 0, NULL, addrs, &buflen) == NO_ERROR) {
-                IP_ADAPTER_ADDRESSES *a;
-                for (a = addrs; a; a = a->Next) {
-                    IP_ADAPTER_UNICAST_ADDRESS *ua;
-                    for (ua = a->FirstUnicastAddress; ua; ua = ua->Next) {
-                        struct sockaddr_in6 *s6 = (struct sockaddr_in6*)ua->Address.lpSockaddr;
-                        if (s6->sin6_family == AF_INET6 &&
-                            !IN6_IS_ADDR_LOOPBACK(&s6->sin6_addr) &&
-                            !IN6_IS_ADDR_LINKLOCAL(&s6->sin6_addr)) {
-                            has_ipv6 = 1;
-                            break;
-                        }
-                    }
-                    if (has_ipv6) break;
-                }
-            }
-            if (addrs) free(addrs);
-#endif
-        }
-
-        if (has_ipv4 && has_ipv6)
-            traceEvent(TRACE_NORMAL, "Edge support: IPv4+IPv6 (dual-stack)");
-        else if (has_ipv6)
-            traceEvent(TRACE_NORMAL, "Edge support: IPv6 only");
-        else
-            traceEvent(TRACE_NORMAL, "Edge support: IPv4 only");
-
-        if (eee.udp_sock6 == -1)
-            traceEvent(TRACE_WARNING, "IPv6 UDP socket unavailable, IPv6 peers will use relay only");
-
-        /* Resolve alternate supernode address only for pure IP addresses (not domains) */
-        if (eee.supernode_alt.family == 0) {
-            char *sn_host = eee.sn_ip_array[eee.sn_idx];
-            struct in_addr ipv4_test;
-            struct in6_addr ipv6_test;
-
-            /* Check if it's a pure IP address */
-            if (inet_pton(AF_INET, sn_host, &ipv4_test) == 1 ||
-                inet_pton(AF_INET6, sn_host, &ipv6_test) == 1) {
-
-                int alt_af = (eee.supernode.family == AF_INET6) ? AF_INET : AF_INET6;
-                int can_resolve = (alt_af == AF_INET6) ? has_ipv6 : has_ipv4;
-
-                if (can_resolve && supernode2addr(&eee.supernode_alt, alt_af, sn_host) == 0) {
-                    n2n_sock_str_t sockbuf_alt;
-                    traceEvent(TRACE_INFO, "Supernode alt address resolved: %s",
-                               sock_to_cstr(sockbuf_alt, &eee.supernode_alt));
-                }
+    /* Resolve alternate supernode address only for pure IP addresses (not domains) */
+    if (eee.supernode_alt.family == 0) {
+        char *sn_host = eee.sn_ip_array[eee.sn_idx];
+        struct in_addr ipv4_test;
+        struct in6_addr ipv6_test;
+        
+        /* Check if it's a pure IP address */
+        if (inet_pton(AF_INET, sn_host, &ipv4_test) == 1 || 
+            inet_pton(AF_INET6, sn_host, &ipv6_test) == 1) {
+            
+            int alt_af = (eee.supernode.family == AF_INET6) ? AF_INET : AF_INET6;
+            int can_resolve = (alt_af == AF_INET6) ? (eee.udp_sock6 != -1) : (eee.udp_sock != -1);
+            
+            if (can_resolve && supernode2addr(&eee.supernode_alt, alt_af, sn_host) == 0) {
+                n2n_sock_str_t sockbuf_alt;
+                traceEvent(TRACE_INFO, "Supernode alt address resolved: %s",
+                           sock_to_cstr(sockbuf_alt, &eee.supernode_alt));
             }
         }
     }
 
-#if !defined(_WIN32)
-    if (mgmt_port == 0)
-    {
-        eee.mgmt_sock = open_socket_unix(mgmt_path, 0660);
-        if(eee.mgmt_sock == -1)
-        {
-            traceEvent( TRACE_ERROR, "Failed to bind management socket %s", mgmt_path);
-            return(-1);
-        }
-    }
-    else
-    {
-#endif
-        eee.mgmt_sock = open_socket(mgmt_port, 0 /* bind LOOPBACK*/ );
-        if(eee.mgmt_sock == -1)
-        {
-            if (mgmt_port == N2N_EDGE_MGMT_PORT) {
-                traceEvent( TRACE_WARNING, "Management socket %u already in use, running without management interface", (unsigned int) mgmt_port);
-                eee.mgmt_sock = -1;
-            } else {
-                traceEvent( TRACE_ERROR, "Failed to bind management socket %u", (unsigned int) mgmt_port);
-                return(-1);
-            }
-        }
-#if !defined(_WIN32)
-    }
-#endif
+    if (setup_mgmt_socket(&eee, mgmt_port, mgmt_path) < 0)
+        return -1;
 
     traceEvent(TRACE_NORMAL, "Edge started");
 
-    /* Attempt UPnP/NAT-PMP port mapping so external peers can reach us.
-     * This is compiled in by default and runs automatically at startup.
-     * Failure is non-fatal - edge continues without port mapping. */
-    {
-        /* Determine the actual bound local port (may differ from local_port if 0) */
-        uint16_t actual_port = 0;
-        if (local_port > 0) {
-            actual_port = (uint16_t)local_port;
-        } else {
-            /* OS assigned a random port - read it back from the socket */
-            struct sockaddr_in bound;
-            socklen_t blen = sizeof(bound);
-            if (getsockname(eee.udp_sock, (struct sockaddr*)&bound, &blen) == 0)
-                actual_port = ntohs(bound.sin_port);
-        }
-
-        if (actual_port > 0) {
-            uint16_t mapped = 0;
-            traceEvent(TRACE_INFO, "Upnp: attempting port mapping for UDP port %u",
-                       (unsigned)actual_port);
-            if (upnp_map_port(actual_port, actual_port, &mapped) == UPNP_OK) {
-                traceEvent(TRACE_NORMAL,
-                           "Upnp: mapped udp port %u",
-                           (unsigned)mapped);
-                eee.upnp_mapped_port = mapped;
-            } else {
-                traceEvent(TRACE_INFO,
-                           "Upnp: ... mapping failed");
-            }
-        }
-    }
-
+    setup_upnp(&eee, local_port);
     set_localip(&eee);
-    update_supernode_reg(&eee, n2n_now() );
+    update_supernode_reg(&eee, n2n_now());
 
     return run_loop(&eee);
 }
@@ -4614,7 +4477,7 @@ static int run_loop(n2n_edge_t * eee )
 
         update_supernode_reg(eee, nowTime);
         check_punch_timeouts(eee, nowTime);
-
+        
         /* Periodically check if supernode domain resolved to a new address */
         check_supernode_domain_and_update(eee, nowTime);
 

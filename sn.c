@@ -943,22 +943,16 @@ static int try_forward( n2n_sn_t * sss,
         else
         {
             ++(sss->stats.errors);
-#ifdef _WIN32
-            DWORD err = WSAGetLastError();
-            W32_ERROR(err, error);
-            traceEvent(TRACE_ERROR, "unicast %lu to [%s] %s FAILED (%d: %ls)",
-                       pktsize,
-                       sock_to_cstr( sockbuf, &(scan->sock) ),
-                       macaddr_str(mac_buf, scan->mac_addr),
-                       err, error );
-            W32_ERROR_FREE(error);
-#else
             traceEvent(TRACE_ERROR, "unicast %lu to [%s] %s FAILED (%d: %s)",
                        pktsize,
                        sock_to_cstr( sockbuf, &(scan->sock) ),
                        macaddr_str(mac_buf, scan->mac_addr),
-                       errno, strerror(errno) );
+#ifdef _WIN32
+                       WSAGetLastError(), "socket error"
+#else
+                       errno, strerror(errno)
 #endif
+                       );
         }
     }
     else
@@ -2039,13 +2033,13 @@ int main( int argc, char * const argv[] )
     sss.mgmt_sock = open_socket(sss.mgmt_port, 0 /* bind LOOPBACK */ );
     if ( -1 == sss.mgmt_sock )
     {
+        traceEvent( TRACE_ERROR, "Failed to open management socket. %s", 
 #ifdef _WIN32
-        W32_ERROR(WSAGetLastError(), error);
-        traceEvent( TRACE_ERROR, "Failed to open management socket. %ls", error );
-        W32_ERROR_FREE(error);
+                    "socket error"
 #else
-        traceEvent( TRACE_ERROR, "Failed to open management socket. %s", strerror(errno) );
+                    strerror(errno)
 #endif
+                    );
         exit(-2);
     }
     traceEvent( TRACE_NORMAL, "supernode is listening on UDP %u (management)", sss.mgmt_port );
