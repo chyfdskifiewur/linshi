@@ -1292,7 +1292,7 @@ static void send_probe( n2n_edge_t * eee, const n2n_sock_t * peer_sock, const n2
     sendto_sock(sock_for_dest(eee, peer_sock), pktbuf, idx, peer_sock);
 }
 
-/** Send PROBE_ACK via supernode: tell srcMac what addr we observed from their PROBE */
+/** Send PROBE_ACK directly to peer: tell srcMac what addr we observed from their PROBE */
 static void send_probe_ack( n2n_edge_t * eee,
                             const n2n_mac_t srcMac,
                             const n2n_sock_t * observed_addr )
@@ -1305,21 +1305,21 @@ static void send_probe_ack( n2n_edge_t * eee,
     memset(&cmn, 0, sizeof(cmn));
     cmn.ttl = N2N_DEFAULT_TTL;
     cmn.pc = n2n_probe_ack;
-    cmn.flags = N2N_FLAGS_FROM_SUPERNODE; /* route via supernode */
+    cmn.flags = 0;
     memcpy(cmn.community, eee->community_name, N2N_COMMUNITY_SIZE);
 
-    memcpy(ack.srcMac, srcMac, N2N_MAC_SIZE);          /* who sent the probe */
-    memcpy(ack.dstMac, eee->device.mac_addr, N2N_MAC_SIZE); /* us, the observer */
+    memcpy(ack.srcMac, srcMac, N2N_MAC_SIZE);
+    memcpy(ack.dstMac, eee->device.mac_addr, N2N_MAC_SIZE);
     ack.observed_addr = *observed_addr;
 
     encode_PROBE_ACK(pktbuf, &idx, &cmn, &ack);
 
     {
         MACSTR_TMP(mac_tmp);
-        traceEvent(TRACE_INFO, "send PROBE_ACK via supernode for %s",
+        traceEvent(TRACE_INFO, "send PROBE_ACK direct to %s",
                    macaddr_str(mac_tmp, srcMac));
     }
-    sendto_sock(sock_for_dest(eee, &eee->supernode), pktbuf, idx, &eee->supernode);
+    sendto_sock(sock_for_dest(eee, observed_addr), pktbuf, idx, observed_addr);
 }
 
 static int is_empty_ip_address( const n2n_sock_t * sock );
@@ -3090,7 +3090,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
         }
         else if(msg_type == n2n_probe_ack)
         {
-            /* Supernode forwarded a PROBE_ACK: we now know our real public addr
+            /* Received PROBE_ACK: we now know our real public addr
              * as observed by the remote peer. Update that peer's sock and retry REGISTER. */
             n2n_PROBE_ACK_t ack;
             decode_PROBE_ACK(&ack, &cmn, udp_buf, &rem, &idx);
@@ -3098,7 +3098,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
             traceEvent(TRACE_INFO, "Rx PROBE_ACK from %s: my observed addr = %s",
                        macaddr_str(mac_buf1, ack.dstMac), sock_to_cstr(sockbuf1, &ack.observed_addr));
 
-            /* The peer that sent PROBE_ACK is ack.dstMac; their sock is 'sender' (via SN).
+            /* The peer that sent PROBE_ACK is ack.dstMac; their sock is 'sender'.
              * More importantly, we now know our own public addr. Update and retry REGISTER. */
             PEERS_LOCK(eee);
             /* Update last_seen in known_peers so keepalive knows peer is alive */
