@@ -241,7 +241,7 @@ struct peer_info {
     uint8_t             punch_retry_count; /* number of punch retries, remove after max */
     uint8_t             register_retry_count; /* REGISTER retries after PROBE_ACK, max 3 */
     time_t              last_register_sent;   /* time last REGISTER was sent after PROBE_ACK */
-    uint8_t             first_seen;        /* 1 = first real packet logged (P2P or relay) */
+    time_t              direct_seen;       /* time of last direct P2P communication with this peer; 0=never */
     n2n_sock_t          temp_local_sock;   /* dynamically selected best local IP for this peer */
     uint8_t             temp_local_sock_valid; /* 1 if temp_local_sock is valid */
 };

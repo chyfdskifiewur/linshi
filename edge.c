@@ -1467,15 +1467,12 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
                     (now - scan->punch_reset_time) > 300 )
         {
             scan->punch_retry_count++;
-            if ( scan->punch_retry_count > 3 ) {
-                traceEvent(TRACE_NORMAL, "Giving up on %s after %u punch retries, removing",
+            if ( scan->punch_retry_count >= 3 ) {
+                traceEvent(TRACE_NORMAL, "Giving up on %s after %u punch retries, relay only",
                            PEER_ID(mac_tmp, scan),
                            scan->punch_retry_count);
-                struct peer_info *tmp = scan;
-                if ( prev ) prev->next = scan->next;
-                else eee->pending_peers = scan->next;
+                prev = scan;
                 scan = scan->next;
-                free(tmp);
                 continue;
             }
             scan->punch_failed = 0;
@@ -1493,7 +1490,7 @@ static void check_punch_timeouts( n2n_edge_t * eee, time_t now )
     }
 }
 
-#define KEEPALIVE_IDLE_SECONDS   20   /* send probe after this many seconds of silence */
+#define KEEPALIVE_IDLE_SECONDS   12   /* send probe after this many seconds of silence */
 #define KEEPALIVE_RETRY_INTERVAL  4   /* seconds between retries */
 #define KEEPALIVE_MAX_FAILS       3   /* remove peer after this many consecutive failures */
 #define KEEPALIVE_TOTAL_TIMEOUT   (KEEPALIVE_IDLE_SECONDS + KEEPALIVE_RETRY_INTERVAL * KEEPALIVE_MAX_FAILS)  /* 32s: give up after */
@@ -1595,6 +1592,7 @@ static void check_keepalive( n2n_edge_t * eee, time_t now )
                     scan->last_probe_sent  = 0;
                     scan->lan_punch_start  = 0;
                     scan->lan_punch_done   = 0;
+                    scan->direct_seen         = 0;
                     send_query_peer(eee, scan->mac_addr);
                     start_punch(eee, scan);
                     scan = next;
@@ -1882,23 +1880,17 @@ void set_peer_operational( n2n_edge_t * eee,
             memset(&scan->sock6, 0, sizeof(n2n_sock_t));  /* Clear IPv6 completely */
         }
         scan->last_seen = n2n_now();
+        scan->direct_seen = n2n_now();
         scan->punch_start_time = 0;
         scan->punch_failed = 0;
         scan->register_retry_count = 0;
-        
-        /* Report P2P connection */
-        if ( scan->first_seen != 1 ) {
+
+        {
             char mac_buf[18];
             n2n_sock_str_t sockbuf;
-            if ( scan->first_seen == 0 ) {
-                traceEvent( TRACE_NORMAL, "P2P direct with %s at %s (%s)",
-                            PEER_ID(mac_buf, scan), sock_to_cstr( sockbuf, peer ),
-                            (peer->family == AF_INET6) ? "IPv6" : "IPv4" );
-            } else {
-                traceEvent( TRACE_NORMAL, "Connection upgraded to P2P with %s at %s",
-                            PEER_ID(mac_buf, scan), sock_to_cstr( sockbuf, peer ));
-            }
-            scan->first_seen = 1;
+            traceEvent( TRACE_NORMAL, "P2P direct with %s at %s (%s)",
+                        PEER_ID(mac_buf, scan), sock_to_cstr( sockbuf, peer ),
+                        (peer->family == AF_INET6) ? "IPv6" : "IPv4" );
         }
 
         /* Send REGISTER back to confirm our new address to the peer */
@@ -2172,6 +2164,12 @@ static int find_peer_destination(n2n_edge_t * eee,
            !scan->punch_failed &&
            (memcmp(mac_address, scan->mac_addr, N2N_MAC_SIZE) == 0))
         {
+            /* If no direct P2P communication for 15s, fall back to relay */
+            if (scan->direct_seen > 0 && (now - scan->direct_seen) >= 15) {
+                traceEvent(TRACE_DEBUG, "find_peer_destination: direct_seen timeout, using relay");
+                break;
+            }
+
             /* If keepalive probe is pending but peer was recently active, still use direct */
             if (scan->last_probe_sent > 0 && (now - scan->last_seen) > KEEPALIVE_TOTAL_TIMEOUT) {
                 break; /* retval stays 0, use supernode as fallback */
@@ -2253,11 +2251,23 @@ static int send_PACKET( n2n_edge_t * eee,
         PEERS_LOCK(eee);
         struct peer_info *p = find_peer_by_mac(eee->pending_peers, dstMac);
         if ( !p ) p = find_peer_by_mac(eee->known_peers, dstMac);
-        int do_query = (!p || (now - p->last_query_sent) >= 5);
-        if (p) p->last_query_sent = now;
+        int do_query;
+        if ( !p ) {
+            p = calloc(1, sizeof(struct peer_info));
+            if (p) {
+                memcpy(p->mac_addr, dstMac, N2N_MAC_SIZE);
+                p->last_query_sent = now;
+                p->last_seen = now;
+                peer_list_add(&eee->pending_peers, p);
+            }
+            do_query = 1;
+        } else {
+            do_query = ((now - p->last_query_sent) >= 5);
+            p->last_query_sent = now;
+        }
         PEERS_UNLOCK(eee);
 
-        if (do_query) {
+        if (do_query && p) {
             update_supernode_reg(eee, now);
             send_query_peer(eee, dstMac);
         }
@@ -2499,18 +2509,8 @@ static int handle_PACKET( n2n_edge_t * eee,
     if (NULL == scan) {
         try_send_register(eee, from_supernode, pkt->srcMac, orig_sender);
     } else if (!from_supernode) {
-        /* P2P packet: check for downgrade before updating address */
-        if ( scan->first_seen == 1 ) {
-            n2n_sock_t *expected = (scan->sock.family == AF_INET) ? &scan->sock : &scan->sock6;
-            if ( 0 != sock_equal(expected, orig_sender) && scan->assigned_ip ) {
-                char vip[INET_ADDRSTRLEN];
-                struct in_addr a = { .s_addr = htonl(scan->assigned_ip) };
-                inet_ntop(AF_INET, &a, vip, sizeof(vip));
-                traceEvent(TRACE_WARNING, "Connection downgraded to relay with %s", vip);
-                scan->first_seen = 2;
-            }
-        }
-        
+        /* P2P packet: refresh direct communication timestamp */
+        scan->direct_seen = now;
         scan->last_probe_sent = 0;
         scan->keepalive_fails = 0;
         
@@ -3072,12 +3072,12 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
             /* sender is the peer's real public address (direct UDP packet).
              * Update pending_peers sock so subsequent REGISTERs go directly. */
             PEERS_LOCK(eee);
-            if ( NULL == find_peer_by_mac(eee->known_peers, probe.srcMac) ) {
+            struct peer_info *known = find_peer_by_mac(eee->known_peers, probe.srcMac);
+            if ( NULL == known ) {
                 struct peer_info *pscan = find_peer_by_mac(eee->pending_peers, probe.srcMac);
                 if ( NULL == pscan ) {
                     try_send_register(eee, 0, probe.srcMac, &sender);
                 } else {
-                    /* Update to real observed address and send REGISTER directly */
                     if (sender.family == AF_INET6) {
                         pscan->sock6 = sender;
                     } else {
@@ -3085,6 +3085,9 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
                     }
                     send_register(eee, &sender);
                 }
+            } else {
+                known->last_seen = now;
+                known->direct_seen = now;
             }
             PEERS_UNLOCK(eee);
         }
@@ -3105,6 +3108,7 @@ static void readFromIPSocket( n2n_edge_t * eee, SOCKET fd )
             struct peer_info *kp = find_peer_by_mac(eee->known_peers, ack.dstMac);
             if (kp) {
                 kp->last_seen = now;
+                kp->direct_seen = now;
                 kp->last_probe_sent = 0;
                 kp->keepalive_fails = 0;
             }
